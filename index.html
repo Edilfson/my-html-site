@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Harita Tabanlı İş Atama</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <!-- Leaflet Draw CSS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <!-- FileSaver.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <!-- xlsx.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+  <style>
+    #map { height: 700px; width: 100%; }
+    .container { margin-top: 20px; }
+    .sidebar { width: 30%; float: right; padding: 10px; border-left: 2px solid #ddd; }
+    .map-container { width: 70%; float: left; }
+    .selected-area { background-color: #f8f9fa; }
+    .notification { color: green; font-weight: bold; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="map-container">
+    <h3>Harita</h3>
+    <div id="map"></div>
+  </div>
+  <div class="sidebar">
+    <h4>Özet</h4>
+    <div id="summary">
+      <div id="current-summary" style="border-bottom: 2px solid #ddd; padding-bottom: 10px; margin-bottom: 10px;">
+        <h5>Anlık Seçim</h5>
+        <p>Seçilen İşler: <span id="current-jobs-count">0</span></p>
+        <p>Hizmet Numaraları: <span id="current-services"></span></p>
+        <p>Sayaç Tipleri: <span id="current-meter-types"></span></p>
+        <p>Kofralar: <span id="current-kofras"></span></p>
+      </div>
+      <div id="total-summary">
+        <h5>Toplam Seçim</h5>
+        <p>Toplam İşler: <span id="total-jobs-count">0</span></p>
+        <p>Hizmet Numaraları: <span id="total-services"></span></p>
+        <p>Sayaç Tipleri: <span id="total-meter-types"></span></p>
+        <p>Kofralar: <span id="total-kofras"></span></p>
+      </div>
+      <p>Hizmet Türü: <span id="service-type"></span></p>
+      <p>Sayaç Tipi: <span id="meter-type"></span></p>
+      <p>Toplam Sayaç Sayısı: <span id="total-meters"></span></p>
+      <button id="save" class="btn btn-primary">
+        <i class="fas fa-save"></i> Kaydet
+      </button>
+      <button id="download" class="btn btn-success">
+        <i class="fas fa-download"></i> Güncel Excel'i İndir
+      </button>
+      <button id="clear" class="btn btn-danger">Tüm Çizimleri Temizle</button>
+      <button id="undo" class="btn btn-warning">Geri Al</button>
+      <button id="redo" class="btn btn-info">Yinele</button>
+    </div>
+    <div id="notification" class="notification"></div>
+    <div id="detail-panel"></div>
+    <div id="search-panel" style="margin-top: 20px;">
+      <h5>Arama</h5>
+      <input type="text" id="search-input" class="form-control" placeholder="Hizmet No veya KOFRA No girin">
+      <button id="search-button" class="btn btn-primary" style="margin-top: 10px;">Ara</button>
+    </div>
+    <div id="filter-panel" style="margin-top: 20px;">
+      <h5>İhbar Türü Filtreleme</h5>
+      <div id="ihbar-type-filters">
+        <!-- İhbar türü seçenekleri buraya dinamik olarak eklenecek -->
+      </div>
+      <button id="apply-ihbar-filter" class="btn btn-secondary" style="margin-top: 10px;">Filtrele</button>
+    </div>
+  </div>
+</div>
+
+<div id="summary-table" style="position: fixed; top: 10px; right: 10px; background-color: white; border: 1px solid #ddd; padding: 10px; z-index: 1000; width: 300px; max-height: 400px; overflow-y: auto;">
+  <h5>Seçilen İşler Özeti</h5>
+  <table class="table table-bordered table-sm">
+    <thead>
+      <tr>
+        <th>Hizmet No</th>
+        <th>Sayaç Tipi</th>
+        <th>Kofra</th>
+      </tr>
+    </thead>
+    <tbody id="summary-table-body">
+      <!-- Seçilen işlerin detayları buraya eklenecek -->
+    </tbody>
+  </table>
+</div>
+
+<div id="filter-panel" style="position: fixed; top: 10px; left: 10px; background-color: white; border: 1px solid #ddd; padding: 10px; z-index: 1000; width: 250px; max-height: 400px; overflow-y: auto;">
+  <h5>İhbar Türü Filtreleme</h5>
+  <div id="ihbar-type-filters">
+    <!-- İhbar türü seçenekleri buraya dinamik olarak eklenecek -->
+  </div>
+  <button id="apply-ihbar-filter" class="btn btn-secondary" style="margin-top: 10px;">Filtrele</button>
+</div>
+
+<!-- File input for Excel -->
+<input type="file" id="excel-file" accept=".xlsx, .xls" class="form-control" style="margin: 20px;">
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<!-- Leaflet Draw JS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+
+<script>
+  let map = L.map('map').setView([41.02859039255361, 28.584803286672358], 13); // Başlangıç koordinatları
+
+  // OpenStreetMap tile layer
+  try {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+  } catch (error) {
+    console.error("Bir hata oluştu:", error);
+    showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+  }
+
+  let drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+
+  // Serbest çizim için Leaflet.Draw ayarlarını güncelleyin
+  let drawControl = new L.Control.Draw({
+    edit: { featureGroup: drawnItems },
+    draw: {
+      polygon: {
+        allowIntersection: false, // Poligonun kendiyle kesişmesine izin verme
+        showArea: true, // Alanı göster
+        shapeOptions: {
+          color: '#ff0000'
+        },
+        freehand: true // Serbest çizim modu
+      },
+      rectangle: false, // Dikdörtgen çizimini devre dışı bırak
+      circle: false, // Daire çizimini devre dışı bırak
+      polyline: false, // Çizgi çizimini devre dışı bırak
+      marker: false // Marker eklemeyi devre dışı bırak
+    }
+  });
+
+  map.addControl(drawControl);
+
+  let metersData = []; // Global hale getirildi
+  let totalJobs = []; // Toplam seçilen işler
+
+  let undoStack = [];
+  let redoStack = [];
+
+  let searchPolygon; // Global değişken olarak tanımlayın
+
+  // Çizim eklendiğinde kaydet
+  map.on('draw:created', function (e) {
+    try {
+      let layer = e.layer;
+      drawnItems.addLayer(layer);
+
+      // Önceki seçimleri sıfırla
+      resetMarkerColors();
+
+      let selected = [];
+
+      // Poligon alanı içindeki marker'ları tespit et
+      metersData.forEach(item => {
+        let point = item.marker.getLatLng();
+
+        if (layer instanceof L.Polygon && isPointInPolygon(point, layer.getLatLngs())) {
+          selected.push(item);
+          if (item.marker instanceof L.CircleMarker) {
+            item.marker.setStyle({ fillColor: "#ff0000" }); // Seçilen işaretçilerin rengini kırmızı yap
+          }
+        }
+      });
+
+      // Anlık özet ekranını güncelle
+      updateCurrentSummary(selected);
+
+      // Özet tabloyu güncelle
+      updateSummaryTable(selected);
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  // Undo işlemi
+  document.getElementById('undo').addEventListener('click', function () {
+    try {
+      if (undoStack.length > 0) {
+        const lastAction = undoStack.pop();
+        if (lastAction.action === 'add') {
+          drawnItems.removeLayer(lastAction.layer);
+          redoStack.push(lastAction);
+        }
+      }
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  // Redo işlemi
+  document.getElementById('redo').addEventListener('click', function () {
+    try {
+      if (redoStack.length > 0) {
+        const lastAction = redoStack.pop();
+        if (lastAction.action === 'add') {
+          drawnItems.addLayer(lastAction.layer);
+          undoStack.push(lastAction);
+        }
+      }
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  // Excel dosyasını okuma
+  document.getElementById('excel-file').addEventListener('change', function (e) {
+    try {
+      let file = e.target.files[0];
+      let reader = new FileReader();
+      
+      reader.onload = function(event) {
+        let data = event.target.result;
+        let workbook = XLSX.read(data, { type: 'binary' });
+        let sheetName = workbook.SheetNames[0];
+        let sheet = workbook.Sheets[sheetName];
+        let jsonData = XLSX.utils.sheet_to_json(sheet);
+        processExcelData(jsonData);
+        loadIhbarTypes();
+      };
+      
+      reader.readAsBinaryString(file);
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  // Excel verisini işleme
+  function processExcelData(data) {
+    try {
+      metersData = []; // Global değişkeni dolduruyoruz
+
+      data.forEach(row => {
+        let lat = parseFloat(row.ENLEM);
+        let lon = parseFloat(row.BOYLAM);
+
+        if (isNaN(lat) || isNaN(lon)) {
+          console.warn("Geçersiz veri atlandı:", row);
+          showNotification("Geçersiz veri atlandı. Lütfen Excel dosyasını kontrol edin.", "error");
+          return; // İşlemden çık
+        }
+
+        const marker = L.circleMarker([lat, lon], {
+          radius: 6,
+          fillColor: "#3388ff",
+          color: "#3388ff",
+          weight: 1,
+          opacity: 1,
+          fillOpacity: 0.8
+        }).addTo(map);
+
+        metersData.push({
+          lat: lat,
+          lon: lon,
+          service: row["HİZMET NUMARASI"],
+          meterType: row["SAYAÇ TİPİ"],
+          kofra: row["KOFRA"] || "Belirtilmemiş",
+          ihbarType: row["İHBAR TÜRÜ"] || "Belirtilmemiş", // İhbar Türü
+          assignedTo: row["Personel"] || "Atanmamış",
+          marker: marker
+        });
+      });
+
+      document.getElementById('total-meters').innerText = metersData.length;
+      showNotification(`${metersData.length} marker başarıyla yüklendi.`, "success");
+
+      // Sayaç türüne göre marker renklerini güncelle
+      updateMarkerColorsBasedOnMeterType();
+
+      // İhbar türlerini yükle
+      loadIhbarTypes();
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  // Noktanın poligon içinde olup olmadığını kontrol et
+  function isPointInPolygon(point, polygonLatLngs) {
+    try {
+      let inside = false;
+      let lat = point.lat;
+      let lng = point.lng;
+
+      let polyPoints = polygonLatLngs[0] ?? polygonLatLngs;
+
+      for (let i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
+        let xi = polyPoints[i].lng,
+          yi = polyPoints[i].lat;
+        let xj = polyPoints[j].lng,
+          yj = polyPoints[j].lat;
+
+        let intersect =
+          yi > lat !== yj > lat &&
+          lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+
+        if (intersect) inside = !inside;
+      }
+
+      return inside;
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  // Tüm çizimleri temizleme
+  document.getElementById('clear').addEventListener('click', function() {
+    try {
+      drawnItems.clearLayers();
+      document.getElementById('notification').innerText = "Tüm çizimler temizlendi.";
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  // Excel dosyasını güncelleme ve indirme
+  document.getElementById('download').addEventListener('click', function () {
+    try {
+      const allJobs = metersData.map(item => ({
+        HizmetNo: item.service || "Belirtilmemiş",
+        SayaçTipi: item.meterType || "Belirtilmemiş",
+        Kofra: item.kofra || "Belirtilmemiş",
+        Personel: item.assignedTo || "Atanmamış", // Atanan personel bilgisi ekleniyor
+        Durum: item.status || "Belirtilmemiş",
+        IhbarTuru: item.ihbarType || "Belirtilmemiş"
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(allJobs);
+      XLSX.utils.book_append_sheet(wb, ws, "Tüm İşler");
+
+      const fileName = `Isler_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+
+      showNotification("Excel dosyası başarıyla indirildi.");
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  // Filtreleme paneli için HTML ekleyin
+  const filterPanel = `
+    <div id="filter-panel">
+      <h5>Filtreleme</h5>
+      <label>Sayaç Tipi:</label>
+      <input type="text" id="filter-meter-type" class="form-control">
+      <label>Hizmet No Aralığı:</label>
+      <input type="number" id="filter-service-min" class="form-control" placeholder="Min">
+      <input type="number" id="filter-service-max" class="form-control" placeholder="Max">
+      <button id="apply-filters" class="btn btn-secondary">Filtrele</button>
+    </div>
+  `;
+  document.getElementById('summary').insertAdjacentHTML('beforeend', filterPanel);
+
+  // Filtreleme işlevi
+  document.getElementById('apply-filters').addEventListener('click', function () {
+    try {
+      const meterType = document.getElementById('filter-meter-type').value.toLowerCase();
+      const serviceMin = parseInt(document.getElementById('filter-service-min').value);
+      const serviceMax = parseInt(document.getElementById('filter-service-max').value);
+
+      const filteredJobs = metersData.filter(item => {
+        const matchesType = meterType ? item.meterType.toLowerCase().includes(meterType) : true;
+        const matchesService = (!serviceMin || item.service >= serviceMin) && (!serviceMax || item.service <= serviceMax);
+        return matchesType && matchesService;
+      });
+
+      resetAllMarkers();
+      highlightMarkers(filteredJobs);
+
+      // Filtre sonuçlarını bir tablo olarak göster
+      const table = document.createElement('table');
+      table.className = "table table-bordered";
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>Hizmet No</th>
+            <th>Sayaç Tipi</th>
+            <th>Kofra</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filteredJobs.map(job => `
+            <tr>
+              <td>${job.service || "Belirtilmemiş"}</td>
+              <td>${job.meterType || "Belirtilmemiş"}</td>
+              <td>${job.kofra || "Belirtilmemiş"}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      `;
+      document.getElementById('summary').appendChild(table);
+
+      showNotification(`${filteredJobs.length} iş filtrelendi.`);
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  function updateFromExcel(data) {
+    try {
+      data.forEach(row => {
+        const marker = metersData.find(item => item.service === row["HİZMET NUMARASI"]);
+        if (marker) {
+          marker.assignedTo = row["Personel"];
+          marker.marker.setStyle({ fillColor: "#ff8800" }); // Güncellenenleri işaretle
+        }
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  const personColors = {
+    "Ali": "#ff0000",
+    "Ayşe": "#0000ff",
+    "Mehmet": "#00ff00"
+  };
+
+  metersData.forEach(item => {
+    try {
+      if (item.assignedTo) {
+        item.marker.setStyle({ fillColor: personColors[item.assignedTo] || "#888888" });
+      }
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  metersData.forEach(item => {
+    try {
+      // Popup içeriğini oluştur
+      let popupContent = `
+        <h5>Konumdaki İşler</h5>
+        <ul>
+          <li><b>Hizmet No:</b> ${item.service || "Belirtilmemiş"}</li>
+          <li><b>Sayaç Tipi:</b> ${item.meterType || "Belirtilmemiş"}</li>
+          <li><b>Kofra:</b> ${item.kofra || "Belirtilmemiş"}</li>
+          <li><b>Personel:</b> ${item.assignedTo || "Atanmamış"}</li>
+          <li><b>İhbar Türü:</b> ${item.ihbarType || "Belirtilmemiş"}</li>
+        </ul>
+      `;
+
+      // Popup'u marker'a bağla
+      item.marker.bindPopup(popupContent);
+
+      // Marker üzerine gelindiğinde popup'ı aç
+      item.marker.on('mouseover', function () {
+        item.marker.openPopup();
+      });
+
+      // Marker'dan çıkıldığında popup'ı kapat
+      item.marker.on('mouseout', function () {
+        item.marker.closePopup();
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  metersData.forEach(item => {
+    try {
+      item.marker.on('click', function () {
+        const status = prompt("Durum girin: Tamamlandı, Başladı, Beklemede");
+        if (status) {
+          item.status = status;
+          item.marker.bindPopup(`<b>Durum:</b> ${status}`).openPopup();
+        }
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  metersData.forEach(item => {
+    try {
+      item.marker.on('click', function () {
+        // İş detaylarını oluştur
+        let jobDetails = `
+          <h5>Konumdaki İşler</h5>
+          <ul>
+            <li><b>Hizmet No:</b> ${item.service || "Belirtilmemiş"}</li>
+            <li><b>Sayaç Tipi:</b> ${item.meterType || "Belirtilmemiş"}</li>
+            <li><b>Kofra:</b> ${item.kofra || "Belirtilmemiş"}</li>
+            <li><b>Personel:</b> ${item.assignedTo || "Atanmamış"}</li>
+            <li><b>İhbar Türü:</b> ${item.ihbarType || "Belirtilmemiş"}</li>
+          </ul>
+        `;
+
+        // Popup'u bağla ve göster
+        item.marker.bindPopup(jobDetails).openPopup();
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  metersData.forEach(item => {
+    try {
+      // Tooltip içeriğini oluştur
+      let tooltipContent = `
+        <b>Hizmet No:</b> ${item.service || "Belirtilmemiş"}<br>
+        <b>Sayaç Tipi:</b> ${item.meterType || "Belirtilmemiş"}<br>
+        <b>Kofra:</b> ${item.kofra || "Belirtilmemiş"}<br>
+        <b>Personel:</b> ${item.assignedTo || "Atanmamış"}<br>
+        <b>İhbar Türü:</b> ${item.ihbarType || "Belirtilmemiş"}
+      `;
+
+      // Tooltip'i marker'a bağla
+      item.marker.bindTooltip(tooltipContent, {
+        permanent: false, // Tooltip sadece hover sırasında gösterilir
+        direction: "top", // Tooltip'in konumu (üstte gösterilir)
+        offset: [0, -10], // Tooltip'in marker'dan uzaklığı
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  window.addEventListener('beforeunload', function () {
+    try {
+      localStorage.setItem('metersData', JSON.stringify(metersData));
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  window.addEventListener('load', function () {
+    try {
+      const savedData = JSON.parse(localStorage.getItem('metersData'));
+      if (savedData) {
+        processExcelData(savedData);
+        showNotification("Veriler yüklendi.");
+      }
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  function updateCurrentSummary(selectedJobs) {
+    try {
+      const services = selectedJobs.map(job => job.service);
+      const meterTypes = selectedJobs.map(job => job.meterType);
+      const kofras = selectedJobs.map(job => job.kofra);
+
+      document.getElementById('current-jobs-count').innerText = selectedJobs.length;
+      document.getElementById('current-services').innerText = services.join(", ");
+      document.getElementById('current-meter-types').innerText = meterTypes.join(", ");
+      document.getElementById('current-kofras').innerText = kofras.join(", ");
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function updateTotalSummary(newJobs) {
+    try {
+      totalJobs = [...totalJobs, ...newJobs];
+      document.getElementById('total-meters').innerText = totalJobs.length;
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  document.getElementById('save').addEventListener('click', function () {
+    try {
+      // Kırmızı renkte olan (seçilen) işaretçileri filtrele
+      const selectedJobs = metersData.filter(item => item.marker.options.fillColor === "#ff0000");
+      const personName = prompt("Personel Adını Girin:");
+
+      if (personName) {
+        // Seçilen işlere personel atayın ve rengini yeşil yapın
+        selectedJobs.forEach(item => {
+          item.assignedTo = personName; // Personel bilgisi ekleniyor
+          item.marker.setStyle({ fillColor: "#00ff00" }); // Atanan işaretçilerin rengini yeşil yap
+          item.marker.bindPopup(
+            `<b>Personel:</b> ${personName}<br><b>Hizmet No:</b> ${item.service || "Belirtilmemiş"}<br><b>Sayaç Tipi:</b> ${item.meterType || "Belirtilmemiş"}<br><b>İhbar Türü:</b> ${item.ihbarType || "Belirtilmemiş"}`
+          );
+        });
+
+        // Kullanıcıya bilgi ver
+        alert(`${selectedJobs.length} iş ${personName} adlı personele atandı.`);
+
+        // Seçimleri sıfırla
+        resetMarkerColors();
+        updateCurrentSummary([]); // Anlık seçim özetini sıfırla
+      }
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  function updateDetailPanel(row, filteredJobs) {
+    try {
+      const detailPanel = document.getElementById('detail-panel');
+      const selectedKofra = row["KOFRA"] || "Belirtilmemiş";
+
+      // Detay panelini güncelle
+      detailPanel.innerHTML = `
+        <h5>Detaylar</h5>
+        <p><b>Hizmet No:</b> ${row["HİZMET NUMARASI"] || "Belirtilmemiş"}</p>
+        <p><b>Sayaç Tipi:</b> ${row["SAYAÇ TİPİ"] || "Belirtilmemiş"}</p>
+        <p><b>Kofra:</b> ${selectedKofra}</p>
+      `;
+
+      // Aynı KOFRA'ya sahip işlerin detaylarını listele
+      let jobDetails = "<h5>Aynı Kofradaki İşler:</h5><ul>";
+      filteredJobs.forEach(item => {
+        jobDetails += `
+          <li>
+            Hizmet No: ${item.service || "Belirtilmemiş"} - Sayaç Tipi: ${item.meterType || "Belirtilmemiş"}
+          </li>
+        `;
+      });
+      jobDetails += "</ul>";
+
+      document.getElementById('summary').innerHTML = jobDetails;
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function resetMarkerColors() {
+    try {
+      metersData.forEach(item => {
+        // Eğer marker yeşil değilse, varsayılan mavi renge döndür
+        if (item.marker.options.fillColor !== "#00ff00") {
+          item.marker.setStyle({ fillColor: "#3388ff" }); // Varsayılan mavi renk
+        }
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function resetAllMarkers() {
+    try {
+      metersData.forEach(item => {
+        if (item.marker) {
+          item.marker.setStyle({ fillColor: "#3388ff", color: "#3388ff" }); // Varsayılan mavi renk
+        }
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function highlightMarkers(filteredJobs) {
+    try {
+      filteredJobs.forEach(item => {
+        if (item.marker) {
+          item.marker.setStyle({ fillColor: "#ff0000", color: "#ff0000" }); // Kırmızı renk
+        }
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function showNotification(message, type = "success") {
+    const notification = document.getElementById('notification');
+    notification.innerText = message;
+    notification.style.color = type === "success" ? "green" : "red";
+    setTimeout(() => {
+      notification.innerText = "";
+    }, 3000);
+  }
+
+  document.getElementById('search-button').addEventListener('click', function () {
+    try {
+      const searchValue = document.getElementById('search-input').value.trim().toLowerCase();
+
+      if (!searchValue) {
+        showNotification("Lütfen bir hizmet numarası veya KOFRA numarası girin.", "error");
+        return;
+      }
+
+      const filteredJobs = metersData.filter(item => {
+        return (
+          (item.service && item.service.toString().toLowerCase() === searchValue) ||
+          (item.kofra && item.kofra.toLowerCase() === searchValue)
+        );
+      });
+
+      if (filteredJobs.length === 0) {
+        showNotification("Eşleşen bir iş bulunamadı.", "error");
+        return;
+      }
+
+      // Marker renklerini sıfırla ve bulunanları vurgula
+      resetAllMarkers();
+      highlightMarkers(filteredJobs);
+
+      // Anlık özet ekranını güncelle
+      updateCurrentSummary(filteredJobs);
+
+      // Özet tabloyu güncelle
+      updateSummaryTable(filteredJobs);
+
+      showNotification(`${filteredJobs.length} iş bulundu.`, "success");
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+
+  function updateMarkerColorsBasedOnMeterType() {
+    try {
+      // KOFRA bazında sayaç türlerini gruplandır
+      const kofraGroups = {};
+
+      metersData.forEach(item => {
+        const kofra = item.kofra || "Belirtilmemiş";
+        const meterType = item.meterType || "Belirtilmemiş";
+
+        if (!kofraGroups[kofra]) {
+          kofraGroups[kofra] = { monofazeCount: 0, otherCount: 0 };
+        }
+
+        if (meterType.toLowerCase() === "monofaze") {
+          kofraGroups[kofra].monofazeCount++;
+        } else {
+          kofraGroups[kofra].otherCount++;
+        }
+      });
+
+      // Marker renklerini güncelle
+      metersData.forEach(item => {
+        const kofra = item.kofra || "Belirtilmemiş";
+        const group = kofraGroups[kofra];
+
+        if (group && group.otherCount > 10) {
+          // 10'dan fazla monofaze olmayan sayaç varsa siyah yap
+          item.marker.setStyle({ fillColor: "#000000", color: "#000000" }); // Siyah renk
+        } else {
+          // Varsayılan mavi renk
+          item.marker.setStyle({ fillColor: "#3388ff", color: "#3388ff" });
+        }
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function updateSummaryTable(selectedJobs) {
+    try {
+      const tableBody = document.getElementById('summary-table-body');
+      tableBody.innerHTML = ""; // Önce tabloyu temizle
+
+      // Sayaç türlerine göre gruplandırma
+      const summary = selectedJobs.reduce(
+        (acc, job) => {
+          const meterType = job.meterType ? job.meterType.toLowerCase() : "belirtilmemiş";
+          if (meterType === "monofaze") {
+            acc.monofaze++;
+          } else if (meterType === "trifaze") {
+            acc.trifaze++;
+          } else {
+            acc.other++;
+          }
+          acc.kofras.add(job.kofra || "Belirtilmemiş"); // KOFRA'ları toplar
+          return acc;
+        },
+        { monofaze: 0, trifaze: 0, other: 0, kofras: new Set() }
+      );
+
+      // Özet bilgilerini tabloya ekle
+      const summaryRows = `
+        <tr>
+          <td>Monofaze Sayaç</td>
+          <td>${summary.monofaze}</td>
+        </tr>
+        <tr>
+          <td>Trifaze Sayaç</td>
+          <td>${summary.trifaze}</td>
+        </tr>
+        <tr>
+          <td>Diğer Sayaç</td>
+          <td>${summary.other}</td>
+        </tr>
+        <tr>
+          <td>Farklı KOFRA Sayısı</td>
+          <td>${summary.kofras.size}</td>
+        </tr>
+        <tr>
+          <td>Toplam İş</td>
+          <td>${selectedJobs.length}</td>
+        </tr>
+      `;
+      tableBody.innerHTML = summaryRows;
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  }
+
+  function loadIhbarTypes() {
+    try {
+      const ihbarTypes = new Set(metersData.map(item => item.ihbarType || "Belirtilmemiş"));
+      const ihbarTypeFilters = document.getElementById('ihbar-type-filters');
+      ihbarTypeFilters.innerHTML = ""; // Önce filtreleri temizle
+
+      ihbarTypes.forEach(type => {
+        const checkbox = document.createElement('div');
+        checkbox.innerHTML = `
+          <input type="checkbox" class="ihbar-type-checkbox" value="${type}">
+          <label>${type}</label>
+        `;
+        ihbarTypeFilters.appendChild(checkbox);
+      });
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("İhbar türleri yüklenirken bir hata oluştu.", "error");
+    }
+  }
+
+  document.getElementById('apply-ihbar-filter').addEventListener('click', function () {
+    try {
+      const selectedTypes = Array.from(document.querySelectorAll('.ihbar-type-checkbox:checked')).map(cb => cb.value);
+
+      if (selectedTypes.length === 0) {
+        showNotification("Lütfen en az bir ihbar türü seçin.", "error");
+        return;
+      }
+
+      // Seçilen ihbar türlerine göre filtrele
+      const filteredJobs = metersData.filter(item => selectedTypes.includes(item.ihbarType || "Belirtilmemiş"));
+
+      if (filteredJobs.length === 0) {
+        showNotification("Seçilen ihbar türüne ait iş bulunamadı.", "error");
+        return;
+      }
+
+      // Marker renklerini sıfırla ve bulunanları vurgula
+      resetAllMarkers();
+      highlightMarkers(filteredJobs);
+
+      // Anlık özet ekranını güncelle
+      updateCurrentSummary(filteredJobs);
+
+      // Özet tabloyu güncelle
+      updateSummaryTable(filteredJobs);
+
+      showNotification(`${filteredJobs.length} iş bulundu.`, "success");
+    } catch (error) {
+      console.error("Bir hata oluştu:", error);
+      showNotification("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
+    }
+  });
+</script>
+</body>
+</html>
